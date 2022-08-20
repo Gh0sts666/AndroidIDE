@@ -20,6 +20,7 @@ package com.itsaky.androidide.utils;
 import androidx.annotation.Nullable;
 
 import com.itsaky.androidide.app.StudioApp;
+import com.itsaky.androidide.models.prefs.EditorPreferencesKt;
 import com.itsaky.androidide.views.SymbolInputView.Symbol;
 
 import java.io.File;
@@ -32,8 +33,9 @@ public class Symbols {
     }
 
     if (file.isFile()) {
-      if (file.getName().endsWith(".java") || file.getName().endsWith(".gradle") || file.getName().endsWith(".kt"))
-        return javaSymbols();
+      if (file.getName().endsWith(".java")
+          || file.getName().endsWith(".gradle")
+          || file.getName().endsWith(".kt")) return javaSymbols();
 
       if (file.getName().endsWith(".xml")) return xmlSymbols();
     }
@@ -98,7 +100,7 @@ public class Symbols {
   }
 
   public static String createTabSpaces() {
-    int size = StudioApp.getInstance().getPrefManager().getEditorTabSize();
+    int size = EditorPreferencesKt.getTabSize();
     StringBuilder tab = new StringBuilder();
     for (int i = 1; i <= size; i++) {
       tab.append(" ");

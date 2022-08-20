@@ -52,12 +52,13 @@ import com.itsaky.androidide.utils.ProjectWriter
 import com.itsaky.toaster.Toaster.Type.ERROR
 import com.itsaky.toaster.Toaster.Type.SUCCESS
 import com.unnamed.b.atv.model.TreeNode
-import java.io.File
-import java.util.*
-import java.util.regex.*
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
 import org.greenrobot.eventbus.ThreadMode.MAIN
+import java.io.File
+import java.util.Objects
+import java.util.regex.Pattern.compile
+import java.util.regex.Pattern.quote
 
 /**
  * Handles events related to files in filetree.
@@ -166,43 +167,46 @@ class FileTreeActionHandler : BaseEventHandler() {
   private fun createNewFile(context: Context, file: File, forceUnknownType: Boolean) {
     if (forceUnknownType) {
       createNewEmptyFile(context, file)
-    } else {
-      val projectDir = getProjectDirPath()
-      Objects.requireNonNull(projectDir)
-      val isJava =
-        Pattern.compile(Pattern.quote(projectDir) + JAVA_PATH_REGEX)
-          .matcher(file.absolutePath)
-          .find()
-      val isRes =
-        Pattern.compile(Pattern.quote(projectDir) + RES_PATH_REGEX)
-          .matcher(file.absolutePath)
-          .find()
-      val isLayoutRes =
-        Pattern.compile(Pattern.quote(projectDir) + LAYOUT_RES_PATH_REGEX)
-          .matcher(file.absolutePath)
-          .find()
-      val isMenuRes =
-        Pattern.compile(Pattern.quote(projectDir) + MENU_RES_PATH_REGEX)
-          .matcher(file.absolutePath)
-          .find()
-      val isDrawableRes =
-        Pattern.compile(Pattern.quote(projectDir) + DRAWABLE_RES_PATH_REGEX)
-          .matcher(file.absolutePath)
-          .find()
-      if (isJava) {
-        createJavaClass(context, file)
-      } else if (isLayoutRes && file.name == "layout") {
-        createLayoutRes(context, file)
-      } else if (isMenuRes && file.name == "menu") {
-        createMenuRes(context, file)
-      } else if (isDrawableRes && file.name == "drawable") {
-        createDrawableRes(context, file)
-      } else if (isRes && file.name == "res") {
-        createNewResource(context, file)
-      } else {
-        createNewEmptyFile(context, file)
-      }
+      return
     }
+
+    val projectDir = getProjectDirPath()
+    Objects.requireNonNull(projectDir)
+    val isJava = compile(quote(projectDir) + JAVA_PATH_REGEX).matcher(file.absolutePath).find()
+    val isRes = compile(quote(projectDir) + RES_PATH_REGEX).matcher(file.absolutePath).find()
+    val isLayoutRes =
+      compile(quote(projectDir) + LAYOUT_RES_PATH_REGEX).matcher(file.absolutePath).find()
+    val isMenuRes =
+      compile(quote(projectDir) + MENU_RES_PATH_REGEX).matcher(file.absolutePath).find()
+    val isDrawableRes =
+      compile(quote(projectDir) + DRAWABLE_RES_PATH_REGEX).matcher(file.absolutePath).find()
+
+    if (isJava) {
+      createJavaClass(context, file)
+      return
+    }
+
+    if (isLayoutRes && file.name == "layout") {
+      createLayoutRes(context, file)
+      return
+    }
+
+    if (isMenuRes && file.name == "menu") {
+      createMenuRes(context, file)
+      return
+    }
+
+    if (isDrawableRes && file.name == "drawable") {
+      createDrawableRes(context, file)
+      return
+    }
+
+    if (isRes && file.name == "res") {
+      createNewResource(context, file)
+      return
+    }
+
+    createNewEmptyFile(context, file)
   }
 
   private fun createJavaClass(context: Context, file: File) {
@@ -214,13 +218,17 @@ class FileTreeActionHandler : BaseEventHandler() {
     builder.setPositiveButton(string.text_create) { dialogInterface, _ ->
       dialogInterface.dismiss()
       val name: String = binding.name.editText!!.text.toString().trim()
+      val autoLayout = binding.checkButton.isChecked
       val pkgName = ProjectWriter.getPackageName(file)
       if (pkgName == null || pkgName.trim { it <= ' ' }.isEmpty()) {
         StudioApp.getInstance().toast(string.msg_get_package_failed, ERROR)
-      } else {
-        val id: Int = binding.typeGroup.checkedButtonId
-        val javaName = if (name.endsWith(".java")) name else "$name.java"
-        val className = if (!name.contains(".")) name else name.substring(0, name.lastIndexOf("."))
+        return@setPositiveButton
+      }
+
+      val id: Int = binding.typeGroup.checkedButtonId
+      val javaName = if (name.endsWith(".java")) name else "$name.java"
+      val className = if (!name.contains(".")) name else name.substring(0, name.lastIndexOf("."))
+      val created =
         when (id) {
           binding.typeClass.id ->
             createFile(context, file, javaName, ProjectWriter.createJavaClass(pkgName, className))
@@ -237,6 +245,10 @@ class FileTreeActionHandler : BaseEventHandler() {
             createFile(context, file, javaName, ProjectWriter.createActivity(pkgName, className))
           else -> createFile(context, file, name, "")
         }
+
+      if (created && autoLayout) {
+        val packagePath = pkgName.toString().replace(".", "/")
+        createAutoLayout(context, file, name, packagePath)
       }
     }
     builder.setNegativeButton(android.R.string.cancel, null)
@@ -251,6 +263,29 @@ class FileTreeActionHandler : BaseEventHandler() {
       ProjectWriter.createLayout(),
       ".xml"
     )
+  }
+
+  private fun createAutoLayout(
+    context: Context,
+    directory: File,
+    fileName: String,
+    packagePath: String
+  ) {
+    val app = StudioApp.getInstance()
+    val dir = directory.toString().replace("java/$packagePath", "res/layout/")
+    val layoutName = ProjectWriter.createLayoutName(fileName.replace(".java", ".xml"))
+    val newFileLayout = File(dir, layoutName)
+    if (newFileLayout.exists()) {
+      app.toast(string.msg_file_exists, ERROR)
+      return
+    }
+
+    if (!FileIOUtils.writeFileFromString(newFileLayout, ProjectWriter.createLayout())) {
+      app.toast(string.msg_file_creation_failed, ERROR)
+      return
+    }
+
+    notifyFileCreated(newFileLayout, context)
   }
 
   private fun createMenuRes(context: Context, file: File) {
@@ -329,32 +364,41 @@ class FileTreeActionHandler : BaseEventHandler() {
     builder.create().show()
   }
 
-  private fun createFile(context: Context, directory: File, name: String, content: String) {
+  private fun createFile(
+    context: Context,
+    directory: File,
+    name: String,
+    content: String
+  ): Boolean {
     val app = StudioApp.getInstance()
-    if (name.length in 1..40 && !name.startsWith("/")) {
-      val newFile = File(directory, name)
-      if (newFile.exists()) {
-        app.toast(string.msg_file_exists, ERROR)
-      } else {
-        if (FileIOUtils.writeFileFromString(newFile, content)) {
-          notifyFileCreated(newFile, context)
-          // TODO Notify language servers about file created event
-          app.toast(string.msg_file_created, SUCCESS)
-          if (lastHeld != null) {
-            val node = TreeNode(newFile)
-            node.viewHolder = FileTreeViewHolder(context)
-            lastHeld!!.addChild(node)
-            requestExpandHeldNode()
-          } else {
-            requestFileListing()
-          }
-        } else {
-          app.toast(string.msg_file_creation_failed, ERROR)
-        }
-      }
-    } else {
+    if (name.length !in 1..40 || name.startsWith("/")) {
       app.toast(string.msg_invalid_name, ERROR)
+      return false
     }
+
+    val newFile = File(directory, name)
+    if (newFile.exists()) {
+      app.toast(string.msg_file_exists, ERROR)
+      return false
+    }
+    if (!FileIOUtils.writeFileFromString(newFile, content)) {
+      app.toast(string.msg_file_creation_failed, ERROR)
+      return false
+    }
+
+    notifyFileCreated(newFile, context)
+    // TODO Notify language servers about file created event
+    app.toast(string.msg_file_created, SUCCESS)
+    if (lastHeld != null) {
+      val node = TreeNode(newFile)
+      node.viewHolder = FileTreeViewHolder(context)
+      lastHeld!!.addChild(node)
+      requestExpandHeldNode()
+    } else {
+      requestFileListing()
+    }
+
+    return true
   }
 
   private fun createNewFolder(context: Context, currentDir: File) {
@@ -369,27 +413,30 @@ class FileTreeActionHandler : BaseEventHandler() {
     builder.setPositiveButton(string.text_create) { dialogInterface, _ ->
       dialogInterface.dismiss()
       val name: String = binding.name.editText!!.text.toString().trim()
-      if (name.length in 1..40 && !name.startsWith("/")) {
-        val newDir = File(currentDir, name)
-        if (newDir.exists()) {
-          app.toast(string.msg_folder_exists, ERROR)
-        } else {
-          if (newDir.mkdirs()) {
-            app.toast(string.msg_folder_created, SUCCESS)
-            if (lastHeld != null) {
-              val node = TreeNode(newDir)
-              node.viewHolder = FileTreeViewHolder(context)
-              lastHeld!!.addChild(node)
-              requestExpandHeldNode()
-            } else {
-              requestFileListing()
-            }
-          } else {
-            app.toast(string.msg_folder_creation_failed, ERROR)
-          }
-        }
-      } else {
+      if (name.length !in 1..40 || name.startsWith("/")) {
         app.toast(string.msg_invalid_name, ERROR)
+        return@setPositiveButton
+      }
+
+      val newDir = File(currentDir, name)
+      if (newDir.exists()) {
+        app.toast(string.msg_folder_exists, ERROR)
+        return@setPositiveButton
+      }
+
+      if (!newDir.mkdirs()) {
+        app.toast(string.msg_folder_creation_failed, ERROR)
+        return@setPositiveButton
+      }
+
+      app.toast(string.msg_folder_created, SUCCESS)
+      if (lastHeld != null) {
+        val node = TreeNode(newDir)
+        node.viewHolder = FileTreeViewHolder(context)
+        lastHeld!!.addChild(node)
+        requestExpandHeldNode()
+      } else {
+        requestFileListing()
       }
     }
     builder.setNegativeButton(android.R.string.cancel, null)
@@ -415,23 +462,25 @@ class FileTreeActionHandler : BaseEventHandler() {
             if (deleted) string.deleted else string.delete_failed,
             if (deleted) SUCCESS else ERROR
           )
-
-          if (deleted) {
-            notifyFileDeleted(file, context)
-            // TODO Notify language servers about file delete event
-            if (lastHeld != null) {
-              val parent = lastHeld!!.parent
-              parent.deleteChild(lastHeld)
-              requestExpandNode(parent)
-            } else {
-              requestFileListing()
-            }
-
-            if (context is EditorActivity) {
-              val frag = context.getEditorForFile(file)
-              if (frag != null) {
-                context.closeFile(context.findIndexOfEditorByFile(frag.file))
-              }
+  
+          if (!deleted) {
+            return@executeAsync
+          }
+          
+          notifyFileDeleted(file, context)
+          // TODO Notify language servers about file delete event
+          if (lastHeld != null) {
+            val parent = lastHeld!!.parent
+            parent.deleteChild(lastHeld)
+            requestExpandNode(parent)
+          } else {
+            requestFileListing()
+          }
+  
+          if (context is EditorActivity) {
+            val frag = context.getEditorForFile(file)
+            if (frag != null) {
+              context.closeFile(context.findIndexOfEditorByFile(frag.file))
             }
           }
         }
@@ -467,19 +516,21 @@ class FileTreeActionHandler : BaseEventHandler() {
         if (renamed) string.renamed else string.rename_failed,
         if (renamed) SUCCESS else ERROR
       )
-      if (renamed) {
-        notifyFileRenamed(file, context)
-        // TODO Notify language servers about file rename event
-        if (lastHeld != null) {
-          val parent = lastHeld!!.parent
-          parent.deleteChild(lastHeld)
-          val node = TreeNode(File(file.parentFile, name))
-          node.viewHolder = FileTreeViewHolder(context)
-          parent.addChild(node)
-          requestExpandNode(parent)
-        } else {
-          requestFileListing()
-        }
+      if (!renamed) {
+        return@setPositiveButton
+      }
+      
+      notifyFileRenamed(file, context)
+      // TODO Notify language servers about file rename event
+      if (lastHeld != null) {
+        val parent = lastHeld!!.parent
+        parent.deleteChild(lastHeld)
+        val node = TreeNode(File(file.parentFile, name))
+        node.viewHolder = FileTreeViewHolder(context)
+        parent.addChild(node)
+        requestExpandNode(parent)
+      } else {
+        requestFileListing()
       }
     }
     builder.create().show()

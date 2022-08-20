@@ -28,7 +28,7 @@ import com.itsaky.androidide.projects.ProjectManager
 import com.itsaky.androidide.utils.ILogger
 import java.nio.file.Path
 import java.time.Instant
-import java.util.concurrent.atomic.*
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Code analyzer for java source code.
@@ -105,12 +105,10 @@ class JavaDiagnosticProvider {
         try {
             compiler.compile(file).get { task -> doAnalyze(file, task) }
           } catch (err: Throwable) {
-
-            if (CancelChecker.isCancelled(err)) {
-              DiagnosticResult.NO_UPDATE
+            
+            if (!CancelChecker.isCancelled(err)) {
+              log.warn("Unable to analyze file", err)
             }
-
-            log.warn("Unable to analyze file", err)
 
             DiagnosticResult.NO_UPDATE
           } finally {
